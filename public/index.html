@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jorunns adventskalender</title>
+<style>
+  :root {
+    --bg1: #12304a; --bg2: #0a1c2e;
+    --door: #b3202f; --door2: #8d1523; --gold: #f3c969; --paper: #fff8ea; --ink: #2b2118;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: Georgia, "Times New Roman", serif;
+    color: #fff; background: radial-gradient(ellipse at top, var(--bg1), var(--bg2)) fixed;
+    overflow-x: hidden;
+  }
+  body.locked { overflow: hidden; height: 100dvh; }
+
+  header { text-align: center; padding: calc(env(safe-area-inset-top) + 18px) 16px 8px; transition: opacity .6s; }
+  body.zoomed header { opacity: 0; }
+  h1 { margin: 0; font-size: clamp(1.6rem, 6vw, 2.6rem); color: var(--gold); letter-spacing: .02em; user-select: none; cursor: default; }
+  .sub { margin: 4px 0 0; opacity: .8; font-size: .95rem; }
+  .badge { display: none; margin-top: 8px; font: 600 .75rem system-ui, sans-serif; background: var(--gold); color: #3a2a00; padding: 3px 10px; border-radius: 99px; }
+  body.bypass .badge { display: inline-block; }
+
+  .stage { transform-origin: 0 0; transition: transform 1.8s cubic-bezier(.65, 0, .25, 1); will-change: transform; max-width: 560px; margin: 0 auto; padding: 12px 12px 40px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  @media (min-width: 520px) { .grid { gap: 14px; } }
+
+  .door { position: relative; aspect-ratio: 3 / 4; perspective: 600px; border: 0; padding: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+  .inside { position: absolute; inset: 0; border-radius: var(--radius); background: radial-gradient(circle at 50% 40%, #ffe9a8, #e6b04a); display: grid; place-items: center; font-size: clamp(1.4rem, 7vw, 2.4rem); box-shadow: inset 0 0 12px rgba(0,0,0,.35); }
+  .flap {
+    position: absolute; inset: 0; border-radius: var(--radius);
+    background: linear-gradient(145deg, var(--door), var(--door2));
+    border: 2px solid rgba(243, 201, 105, .55);
+    display: grid; place-items: center;
+    font-size: clamp(1.2rem, 6vw, 2rem); font-weight: bold; color: var(--gold);
+    transform-origin: left center; transition: transform 1s cubic-bezier(.3, .7, .3, 1);
+    backface-visibility: hidden; box-shadow: 0 3px 8px rgba(0,0,0,.4);
+  }
+  .flap::after { content: ""; position: absolute; right: 8%; top: 50%; width: 6px; height: 6px; border-radius: 50%; background: var(--gold); opacity: .7; }
+  .door.open .flap { transform: rotateY(-115deg); }
+  .door.seen .flap { filter: brightness(.7); }
+  .door.prev .flap { transition: none; }
+  .door.locked-hint .flap { animation: shake .6s; }
+  @keyframes shake { 0%,100% { transform: translateX(0) } 20% { transform: translateX(-6px) } 40% { transform: translateX(6px) } 60% { transform: translateX(-4px) } 80% { transform: translateX(4px) } }
+
+  /* melding */
+  .overlay { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; padding: 20px; background: rgba(5, 12, 22, .6); opacity: 0; transition: opacity .5s; }
+  .overlay.show { display: grid; }
+  .overlay.visible { opacity: 1; }
+  .card { background: var(--paper); color: var(--ink); max-width: 480px; width: 100%; max-height: 80dvh; overflow: auto; border-radius: 14px; padding: 26px 22px 20px; box-shadow: 0 10px 40px rgba(0,0,0,.5); border: 3px solid var(--gold); transform: scale(.85); transition: transform .5s cubic-bezier(.3, 1.4, .5, 1); }
+  .overlay.visible .card { transform: scale(1); }
+  .card .num { color: var(--door); font-size: .9rem; letter-spacing: .15em; text-transform: uppercase; margin: 0 0 8px; text-align: center; }
+  .card .text { font-size: 1.15rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .card .text a { color: var(--door); font-weight: bold; text-decoration: underline; }
+  .card button { display: block; margin: 20px auto 0; font: 600 1rem system-ui, sans-serif; background: var(--door); color: #fff; border: 0; border-radius: 99px; padding: 10px 26px; cursor: pointer; }
+
+  .toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 28px); transform: translate(-50%, 30px); background: var(--paper); color: var(--ink); padding: 12px 20px; border-radius: 12px; font: 500 1rem system-ui, sans-serif; box-shadow: 0 6px 24px rgba(0,0,0,.5); opacity: 0; pointer-events: none; transition: all .35s; z-index: 30; max-width: 90vw; text-align: center; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  .snow { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+  .snow i { position: absolute; top: -10px; color: #fff; opacity: .7; animation: fall linear infinite; }
+  @keyframes fall { to { transform: translateY(105vh) translateX(30px); } }
+  header, .stage { position: relative; z-index: 1; }
+  @media (prefers-reduced-motion: reduce) {
+    .snow { display: none; }
+    .stage { transition-duration: .01s; }
+  }
+</style>
+</head>
+<body>
+<div class="snow" id="snow"></div>
+
+<header>
+  <h1 id="title">Jorunns adventskalender</h1>
+  <p class="sub" id="sub"></p>
+  <span class="badge">Testmodus – alle luker kan åpnes</span>
+</header>
+
+<main class="stage" id="stage"><div class="grid" id="grid"></div></main>
+
+<div class="overlay" id="overlay" role="dialog" aria-modal="true">
+  <div class="card">
+    <p class="num" id="cardNum"></p>
+    <div class="text" id="cardText"></div>
+    <button id="closeBtn">Lukk</button>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const stage = $('stage'), grid = $('grid');
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let status = { unlocked: 0, year: new Date().getFullYear() };
+  let busy = false;
+  const store = {
+    get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { sessionStorage.setItem(k, v); } catch {} },
+    del(k) { try { sessionStorage.removeItem(k); } catch {} },
+  };
+  const seenKey = 'jorunn-seen';
+  const seen = new Set((() => { try { return JSON.parse(localStorage.getItem(seenKey) || '[]'); } catch { return []; } })());
+  const saveSeen = () => { try { localStorage.setItem(seenKey, JSON.stringify([...seen])); } catch {} };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const bypass = () => store.get('jorunn-bypass') || '';
+
+  // Fast, "tilfeldig" rekkefølge på lukene (samme for alle)
+  const order = (() => {
+    const a = Array.from({ length: 24 }, (_, i) => i + 1);
+    let s = 24;
+    const rnd = () => (s = (s * 9301 + 49297) % 233280) / 233280;
+    for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+    return a;
+  })();
+
+  order.forEach(n => {
+    const b = document.createElement('button');
+    b.className = 'door'; b.dataset.n = n;
+    b.setAttribute('aria-label', 'Luke ' + n);
+    b.innerHTML = '<div class="inside">⭐</div><div class="flap">' + n + '</div>';
+    if (seen.has(n)) b.classList.add('seen');
+    b.addEventListener('click', () => openDoor(n));
+    grid.appendChild(b);
+  });
+  const door = n => grid.querySelector('.door[data-n="' + n + '"]');
+
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 3500);
+  }
+
+  async function fetchDoor(n) {
+    const headers = bypass() ? { 'x-bypass-code': bypass() } : {};
+    const r = await fetch('/api/door/' + n, { headers });
+    if (r.status === 403) return { locked: true };
+    if (!r.ok) throw new Error('Feil ' + r.status);
+    return r.json();
+  }
+
+  function zoomTo(el) {
+    window.scrollTo(0, 0);
+    document.body.classList.add('locked', 'zoomed');
+    stage.style.transition = 'none'; stage.style.transform = 'none';
+    const s0 = stage.getBoundingClientRect(), d = el.getBoundingClientRect();
+    const cx = d.left - s0.left + d.width / 2, cy = d.top - s0.top + d.height / 2;
+    const k = Math.min(innerWidth * 0.55 / d.width, innerHeight * 0.45 / d.height, 7);
+    const tx = innerWidth / 2 - s0.left - cx * k, ty = innerHeight / 2 - s0.top - cy * k;
+    stage.getBoundingClientRect(); // tving reflow
+    stage.style.transition = '';
+    stage.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
+    return sleep(reduced ? 50 : 1900);
+  }
+  function zoomOut() {
+    stage.style.transform = 'none';
+    document.body.classList.remove('zoomed');
+    return sleep(reduced ? 50 : 1800).then(() => document.body.classList.remove('locked'));
+  }
+
+  // Tekst med lenker: [KLIKK HER](https://eksempel.no) – eller bare en http(s)-adresse.
+  // Bygger DOM-noder (ingen innerHTML), og kun http/https tillates.
+  function renderText(el, text) {
+    el.textContent = '';
+    const re = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s]+)/g;
+    let last = 0, m;
+    const link = (label, href) => {
+      const a = document.createElement('a');
+      a.href = href; a.textContent = label; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      el.appendChild(a);
+    };
+    while ((m = re.exec(text))) {
+      if (m.index > last) el.appendChild(document.createTextNode(text.slice(last, m.index)));
+      if (m[1]) link(m[1], m[2]); else link(m[3], m[3]);
+      last = re.lastIndex;
+    }
+    if (last < text.length) el.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  function dateText(n) { return n + '. desember'; }
+
+  async function openDoor(n) {
+    if (busy) return; busy = true;
+    const el = door(n);
+    try {
+      if (!el) throw new Error('no door');
+      // Hent først (ikke vis) – så vet vi om den er låst
+      const dataP = fetchDoor(n).catch(e => ({ error: e }));
+      await zoomTo(el);
+      const data = await dataP;
+      if (data.locked) {
+        el.classList.add('locked-hint'); setTimeout(() => el.classList.remove('locked-hint'), 700);
+        toast('Luke ' + n + ' kan ikke åpnes før ' + dateText(n) + ' 🎄');
+        await sleep(1600);
+        await zoomOut();
+        return;
+      }
+      if (data.error) { toast('Noe gikk galt. Prøv igjen.'); await zoomOut(); return; }
+      el.classList.add('open', 'seen'); seen.add(n); saveSeen();
+      await sleep(reduced ? 50 : 1100);
+      $('cardNum').textContent = 'Luke ' + n;
+      renderText($('cardText'), data.text || '🎁');
+      const ov = $('overlay'); ov.classList.add('show');
+      requestAnimationFrame(() => ov.classList.add('visible'));
+      await new Promise(res => { closeResolve = res; });
+      ov.classList.remove('visible');
+      await sleep(400); ov.classList.remove('show');
+      el.classList.remove('open');
+      await zoomOut();
+    } finally { busy = false; }
+  }
+  let closeResolve = null;
+  $('closeBtn').addEventListener('click', () => closeResolve && closeResolve());
+  $('overlay').addEventListener('click', e => { if (e.target === $('overlay')) closeResolve && closeResolve(); });
+  addEventListener('keydown', e => { if (e.key === 'Escape') closeResolve && closeResolve(); });
+
+  // Skjult testmodus: trykk 5 ganger raskt på tittelen
+  let taps = 0, tapTimer;
+  $('title').addEventListener('click', async () => {
+    if (bypass()) { store.del('jorunn-bypass'); applyBypass(); toast('Testmodus av'); return; }
+    taps++; clearTimeout(tapTimer); tapTimer = setTimeout(() => taps = 0, 1500);
+    if (taps >= 5) {
+      taps = 0;
+      const code = prompt('Hemmelig kode:');
+      if (!code) return;
+      const r = await fetch('/api/bypass-check', { method: 'POST', headers: { 'x-bypass-code': code } });
+      if (r.ok) { store.set('jorunn-bypass', code); applyBypass(); toast('Testmodus på'); }
+      else toast(r.status === 429 ? 'For mange forsøk' : 'Feil kode');
+    }
+  });
+  function applyBypass() { document.body.classList.toggle('bypass', !!bypass()); }
+  applyBypass();
+
+  // Snø
+  if (!reduced) {
+    const snow = $('snow');
+    for (let i = 0; i < 28; i++) {
+      const f = document.createElement('i'); f.textContent = '❄';
+      f.style.left = Math.random() * 100 + '%';
+      f.style.fontSize = 8 + Math.random() * 12 + 'px';
+      f.style.animationDuration = 8 + Math.random() * 12 + 's';
+      f.style.animationDelay = -Math.random() * 20 + 's';
+      snow.appendChild(f);
+    }
+  }
+
+  // Start
+  (async () => {
+    try { status = await (await fetch('/api/status')).json(); } catch {}
+    $('sub').textContent = status.unlocked > 0 ? 'Åpne dagens luke!' : 'Kalenderen åpner 1. desember';
+    const q = new URLSearchParams(location.search);
+    const n = parseInt(q.get('luke') || q.get('door') || q.get('day') || '', 10);
+    if (n >= 1 && n <= 24) {
+      // Forrige luker står allerede åpne når man ankommer (uten animasjon)
+      for (let i = 1; i < n; i++) { const d = door(i); if (d) d.classList.add('open', 'prev'); }
+      await sleep(reduced ? 100 : 1200); // vis hele kalenderen først
+      openDoor(n);
+    }
+  })();
+})();
+</script>
+</body>
+</html>
