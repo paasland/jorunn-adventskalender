@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Admin – adventskalender</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f3f1ec; color: #222; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4rem; }
+  .box { background: #fff; border-radius: 10px; padding: 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  input, textarea { width: 100%; font: inherit; padding: 10px; border: 1px solid #bbb; border-radius: 8px; }
+  textarea { min-height: 90px; resize: vertical; }
+  button { font: 600 .95rem system-ui; padding: 9px 16px; border: 0; border-radius: 8px; background: #b3202f; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.sec { background: #e5e1d8; color: #222; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .row .grow { flex: 1; }
+  .err { color: #b3202f; margin-top: 8px; }
+  .ok { color: #1c7a3a; font-size: .9rem; }
+  .day { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .day b { font-size: 1.1rem; }
+  .tag { font-size: .75rem; padding: 2px 8px; border-radius: 99px; background: #ddd; }
+  .tag.open { background: #cdeed7; }
+  .sticky { position: sticky; top: 0; background: #f3f1ec; padding: 8px 0; z-index: 2; }
+  small { color: #666; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  @media (max-width: 480px) { .two { grid-template-columns: 1fr; } }
+  details summary { cursor: pointer; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎄 Admin – Jorunns adventskalender</h1>
+
+  <div class="box" id="login">
+    <p>Logg inn med et GitHub-token som har tilgangen <b>Contents: Read and write</b> til dette repoet.
+       Endringer lagres som en commit og er synlige for Jorunn etter ca. ett minutt.</p>
+    <div class="two">
+      <div><label for="repo">Repo (eier/navn)</label><input id="repo" placeholder="paasland/jorunn-adventskalender"></div>
+      <div><label for="branch">Branch</label><input id="branch" value="main"></div>
+    </div>
+    <label for="tok">GitHub-token</label>
+    <input type="password" id="tok" autocomplete="off" placeholder="github_pat_…">
+    <div class="row"><button id="loginBtn">Logg inn</button></div>
+    <div class="err" id="loginErr"></div>
+  </div>
+
+  <div id="editor" hidden>
+    <div class="box">
+      <b>Lenker:</b> skriv <code>[KLIKK HER](https://www.google.com)</code> – da vises «KLIKK HER» som en lenke.
+      En vanlig adresse som <code>https://www.google.com</code> blir også en lenke. Bare http/https støttes.
+    </div>
+
+    <div class="sticky box row">
+      <span class="grow" id="info"></span>
+      <button id="saveAll">Lagre alle</button>
+      <button class="sec" id="logout">Logg ut</button>
+    </div>
+
+    <div class="box">
+      <details>
+        <summary>Innstillinger (år og hemmelig kode)</summary>
+        <div class="two">
+          <div><label for="year">Kalenderår</label><input id="year" type="number"></div>
+          <div><label for="bypass">Ny hemmelig bypass-kode</label><input id="bypass" placeholder="(tom = ikke endre)"></div>
+        </div>
+        <small>Koden brukes ved å trykke 5 ganger raskt på tittelen på kalendersiden. Kun et hash av koden lagres, men siden alt er statisk kan en svært bestemt person i teorien knekke en kort kode – velg en lang.</small>
+        <div class="row"><button id="saveCfg">Lagre innstillinger</button><span class="ok" id="cfgMsg"></span></div>
+      </details>
+    </div>
+
+    <div id="list"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const ss = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} }, del: k => { try { sessionStorage.removeItem(k); } catch {} } };
+  const ls = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+
+  let repo = '', branch = 'main', token = '';
+  let messages = {}, config = {}, shas = {};
+
+  // Forslag til repo-navn når siden ligger på GitHub Pages (eier.github.io/repo/)
+  (() => {
+    const saved = ls.get('adm-repo');
+    if (saved) { $('repo').value = saved; return; }
+    const m = location.hostname.match(/^(.+)\.github\.io$/);
+    const seg = location.pathname.split('/')[1];
+    if (m && seg && seg !== 'admin.html') $('repo').value = m[1] + '/' + seg;
+  })();
+  if (ls.get('adm-branch')) $('branch').value = ls.get('adm-branch');
+
+  const b64enc = s => { const b = new TextEncoder().encode(s); let bin = ''; b.forEach(x => bin += String.fromCharCode(x)); return btoa(bin); };
+  const b64dec = s => { const bin = atob(s.replace(/\s/g, '')); return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))); };
+
+  async function gh(method, path, body) {
+    const r = await fetch(`https://api.github.com/repos/${repo}/contents/${path}` + (method === 'GET' ? `?ref=${encodeURIComponent(branch)}` : ''), {
+      method,
+      headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+      body: body ? JSON.stringify(body) : undefined,
+      cache: 'no-store',
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const e = new Error(r.status === 401 ? 'Ugyldig token' : r.status === 404 ? 'Fant ikke repo/fil (sjekk navn, branch og at tokenet har tilgang)' : (j.message || 'Feil ' + r.status));
+      e.status = r.status; throw e;
+    }
+    return j;
+  }
+  async function readJson(path) {
+    const j = await gh('GET', path);
+    shas[path] = j.sha;
+    return JSON.parse(b64dec(j.content));
+  }
+  async function writeJson(path, obj, msg) {
+    const put = () => gh('PUT', path, { message: msg, content: b64enc(JSON.stringify(obj, null, 2) + '\n'), sha: shas[path], branch });
+    let res;
+    try { res = await put(); }
+    catch (e) {
+      if (e.status !== 409 && e.status !== 422) throw e;
+      shas[path] = (await gh('GET', path)).sha; res = await put(); // sha var utdatert – prøv én gang til
+    }
+    shas[path] = res.content.sha;
+  }
+
+  async function sha256(s) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function unlockedToday() {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Oslo', year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date());
+    const g = t => Number(parts.find(p => p.type === t).value);
+    const y = g('year'), m = g('month'), d = g('day'), cy = Number(config.year) || y;
+    return y > cy ? 24 : (y === cy && m === 12 ? Math.min(d, 24) : 0);
+  }
+
+  function render() {
+    const unlocked = unlockedToday();
+    $('info').textContent = `Åpne luker i dag: ${unlocked} av 24`;
+    $('year').value = config.year || new Date().getFullYear();
+    const base = location.href.replace(/admin\.html.*$/, '');
+    const list = $('list'); list.innerHTML = '';
+    for (let n = 1; n <= 24; n++) {
+      const box = document.createElement('div'); box.className = 'box';
+      const link = base + '?luke=' + n;
+      box.innerHTML = `
+        <div class="day"><b>Luke ${n}</b><span class="tag ${n <= unlocked ? 'open' : ''}">${n <= unlocked ? 'kan åpnes nå' : 'åpner ' + n + '. des'}</span></div>
+        <textarea data-n="${n}" maxlength="5000"></textarea>
+        <div class="row">
+          <button data-save="${n}">Lagre</button>
+          <button class="sec" data-copy="${n}">Kopier lenke</button>
+          <a href="${link}" target="_blank" rel="noopener"><small>${link}</small></a>
+          <span class="ok" data-msg="${n}"></span>
+        </div>`;
+      box.querySelector('textarea').value = messages[n] || '';
+      list.appendChild(box);
+    }
+  }
+
+  function flash(el, txt) { el.textContent = txt; setTimeout(() => el.textContent = '', 3000); }
+  const busy = on => document.querySelectorAll('button').forEach(b => b.disabled = on);
+
+  async function save(nums, label) {
+    nums.forEach(n => messages[n] = document.querySelector(`textarea[data-n="${n}"]`).value);
+    busy(true);
+    try {
+      await writeJson('messages.json', messages, `Oppdater luke ${label}`);
+      nums.forEach(n => flash(document.querySelector(`[data-msg="${n}"]`), '✓ Lagret (synlig om ca. 1 min)'));
+    } finally { busy(false); }
+  }
+
+  $('list').addEventListener('click', async e => {
+    const s = e.target.dataset.save, c = e.target.dataset.copy;
+    try {
+      if (s) await save([s], s);
+      if (c) {
+        await navigator.clipboard.writeText(location.href.replace(/admin\.html.*$/, '') + '?luke=' + c);
+        e.target.textContent = 'Kopiert!'; setTimeout(() => e.target.textContent = 'Kopier lenke', 1500);
+      }
+    } catch (err) { alert(err.message); }
+  });
+  $('saveAll').addEventListener('click', async () => {
+    try { await save(Array.from({ length: 24 }, (_, i) => String(i + 1)), 'alle'); alert('Alle luker lagret. Synlig for besøkende om ca. 1 minutt.'); } catch (err) { alert(err.message); }
+  });
+  $('saveCfg').addEventListener('click', async () => {
+    busy(true);
+    try {
+      config.year = Number($('year').value) || config.year;
+      const code = $('bypass').value;
+      if (code) config.bypassHash = await sha256(code);
+      await writeJson('config.json', config, 'Oppdater innstillinger');
+      $('bypass').value = ''; flash($('cfgMsg'), '✓ Lagret'); render();
+    } catch (err) { alert(err.message); } finally { busy(false); }
+  });
+  $('logout').addEventListener('click', () => { ss.del('adm-tok'); location.reload(); });
+
+  async function start(tok) {
+    repo = $('repo').value.trim(); branch = $('branch').value.trim() || 'main'; token = tok.trim();
+    $('loginErr').textContent = '';
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) { $('loginErr').textContent = 'Skriv repo som eier/navn'; return; }
+    busy(true);
+    try {
+      messages = await readJson('messages.json');
+      try { config = await readJson('config.json'); } catch { config = { year: new Date().getFullYear(), bypassHash: '' }; }
+      ss.set('adm-tok', token); ls.set('adm-repo', repo); ls.set('adm-branch', branch);
+      $('login').hidden = true; $('editor').hidden = false; render();
+    } catch (e) { $('loginErr').textContent = e.message; } finally { busy(false); }
+  }
+  $('loginBtn').addEventListener('click', () => start($('tok').value));
+  $('tok').addEventListener('keydown', e => { if (e.key === 'Enter') start($('tok').value); });
+  const saved = ss.get('adm-tok');
+  if (saved && $('repo').value) start(saved);
+})();
+</script>
+</body>
+</html>

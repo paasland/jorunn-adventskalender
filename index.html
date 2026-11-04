@@ -135,12 +135,35 @@
     clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 3500);
   }
 
+  let config = { year: new Date().getFullYear(), bypassHash: '' };
+
+  // Dagens dato i Norge. På localhost kan man teste med ?fakedate=2026-12-10
+  function osloToday() {
+    const fake = new URLSearchParams(location.search).get('fakedate');
+    if (fake && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
+      const [y, m, d] = fake.split('-').map(Number); return { y, m, d };
+    }
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Oslo', year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date());
+    const get = t => Number(parts.find(p => p.type === t).value);
+    return { y: get('year'), m: get('month'), d: get('day') };
+  }
+  function unlockedDays() {
+    const { y, m, d } = osloToday();
+    if (y > config.year) return 24;
+    if (y === config.year && m === 12) return Math.min(d, 24);
+    return 0;
+  }
+  async function sha256(s) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
   async function fetchDoor(n) {
-    const headers = bypass() ? { 'x-bypass-code': bypass() } : {};
-    const r = await fetch('/api/door/' + n, { headers });
-    if (r.status === 403) return { locked: true };
+    if (n > unlockedDays() && !bypass()) return { locked: true };
+    const r = await fetch('messages.json?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('Feil ' + r.status);
-    return r.json();
+    const msgs = await r.json();
+    return { day: n, text: msgs[String(n)] || '' };
   }
 
   function zoomTo(el) {
@@ -227,9 +250,9 @@
       taps = 0;
       const code = prompt('Hemmelig kode:');
       if (!code) return;
-      const r = await fetch('/api/bypass-check', { method: 'POST', headers: { 'x-bypass-code': code } });
-      if (r.ok) { store.set('jorunn-bypass', code); applyBypass(); toast('Testmodus på'); }
-      else toast(r.status === 429 ? 'For mange forsøk' : 'Feil kode');
+      if (config.bypassHash && (await sha256(code)) === config.bypassHash) {
+        store.set('jorunn-bypass', '1'); applyBypass(); toast('Testmodus på');
+      } else toast('Feil kode');
     }
   });
   function applyBypass() { document.body.classList.toggle('bypass', !!bypass()); }
@@ -250,8 +273,8 @@
 
   // Start
   (async () => {
-    try { status = await (await fetch('/api/status')).json(); } catch {}
-    $('sub').textContent = status.unlocked > 0 ? 'Åpne dagens luke!' : 'Kalenderen åpner 1. desember';
+    try { config = await (await fetch('config.json?t=' + Date.now(), { cache: 'no-store' })).json(); } catch {}
+    $('sub').textContent = unlockedDays() > 0 ? 'Åpne dagens luke!' : 'Kalenderen åpner 1. desember';
     const q = new URLSearchParams(location.search);
     const n = parseInt(q.get('luke') || q.get('door') || q.get('day') || '', 10);
     if (n >= 1 && n <= 24) {
