@@ -58,17 +58,22 @@
     <div class="sticky box row">
       <span class="grow" id="info"></span>
       <button id="saveAll">Lagre alle</button>
+      <button class="sec" id="printQr">QR-koder (utskrift)</button>
       <button class="sec" id="logout">Logg ut</button>
     </div>
 
     <div class="box">
       <details>
-        <summary>Innstillinger (år og hemmelig kode)</summary>
+        <summary>Innstillinger (år, hovedhemmelighet og testkode)</summary>
+        <label for="master">Hovedhemmelighet (nøkkelen til alle luker)</label>
+        <input id="master" autocomplete="off" placeholder="(ikke satt)">
+        <small><b>Ta vare på denne (passordbehandler)!</b> Lukene krypteres med nøkler utledet fra den, og den lagres bare i denne nettleseren – ikke i repoet. Mister du den, kan ikke lukene leses igjen og QR-kodene må lages på nytt. Endrer du den, slutter allerede utskrevne QR-koder å virke.</small>
+        <div class="row"><button id="saveMaster" class="sec">Bruk denne hovedhemmeligheten</button></div>
         <div class="two">
           <div><label for="year">Kalenderår</label><input id="year" type="number"></div>
-          <div><label for="bypass">Ny hemmelig bypass-kode</label><input id="bypass" placeholder="(tom = ikke endre)"></div>
+          <div><label for="bypass">Hemmelig bypass-kode</label><input id="bypass" autocomplete="off" placeholder="(ingen kode satt)"></div>
         </div>
-        <small>Koden brukes ved å trykke 5 ganger raskt på tittelen på kalendersiden. Kun et hash av koden lagres, men siden alt er statisk kan en svært bestemt person i teorien knekke en kort kode – velg en lang.</small>
+        <small>Koden brukes ved å trykke 5 ganger raskt på tittelen på kalendersiden. Koden lagres i klartekst i config.json (som er offentlig lesbar), slik at den kan vises her. Den låser bare opp luker i grensesnittet, og tekstene er allerede offentlige. Tom kode = testmodus av.</small>
         <div class="row"><button id="saveCfg">Lagre innstillinger</button><span class="ok" id="cfgMsg"></span></div>
       </details>
     </div>
@@ -77,6 +82,8 @@
   </div>
 </div>
 
+<script src="lock.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -84,7 +91,7 @@
   const ls = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 
   let repo = '', branch = 'main', token = '';
-  let messages = {}, config = {}, shas = {};
+  let messages = {}, config = {}, shas = {}, master = '', plain = {}, dkeys = {};
 
   // Forslag til repo-navn når siden ligger på GitHub Pages (eier.github.io/repo/)
   (() => {
@@ -141,36 +148,56 @@
     return y > cy ? 24 : (y === cy && m === 12 ? Math.min(d, 24) : 0);
   }
 
+  async function prepare() {
+    plain = {}; dkeys = {};
+    for (let n = 1; n <= 24; n++) {
+      const v = messages[n];
+      if (master) dkeys[n] = await Lock.doorKey(master, n);
+      if (!Lock.isEncrypted(v)) plain[n] = v || '';
+      else if (master) { try { plain[n] = await Lock.decrypt(v, dkeys[n]); } catch { /* feil hovedhemmelighet */ } }
+    }
+  }
+  const doorLink = n => location.href.replace(/admin\.html.*$/, '').replace(/[?#].*$/, '') + '?luke=' + n + (dkeys[n] ? '#k=' + dkeys[n] : '');
+
   function render() {
+    $('master').value = master;
+    if (!master || Object.keys(plain).length < 24) document.querySelector('#editor details').open = true;
     const unlocked = unlockedToday();
     $('info').textContent = `Åpne luker i dag: ${unlocked} av 24`;
     $('year').value = config.year || new Date().getFullYear();
-    const base = location.href.replace(/admin\.html.*$/, '');
+    $('bypass').value = config.bypassCode || '';
+    $('bypass').placeholder = config.bypassHash && !config.bypassCode ? '(kode satt, men ukjent – skriv en ny)' : '(ingen kode satt)';
     const list = $('list'); list.innerHTML = '';
     for (let n = 1; n <= 24; n++) {
       const box = document.createElement('div'); box.className = 'box';
-      const link = base + '?luke=' + n;
+      const link = doorLink(n);
+      const locked = !(n in plain);
       box.innerHTML = `
         <div class="day"><b>Luke ${n}</b><span class="tag ${n <= unlocked ? 'open' : ''}">${n <= unlocked ? 'kan åpnes nå' : 'åpner ' + n + '. des'}</span></div>
-        <textarea data-n="${n}" maxlength="5000"></textarea>
+        <textarea data-n="${n}" maxlength="5000" ${locked ? 'disabled placeholder="(kryptert – skriv inn riktig hovedhemmelighet under Innstillinger)"' : ''}></textarea>
         <div class="row">
-          <button data-save="${n}">Lagre</button>
-          <button class="sec" data-copy="${n}">Kopier lenke</button>
-          <a href="${link}" target="_blank" rel="noopener"><small>${link}</small></a>
+          <button data-save="${n}" ${locked ? 'disabled' : ''}>Lagre</button>
+          <button class="sec" data-copy="${n}">Kopier lenke (med nøkkel)</button>
+          <a href="${link}" target="_blank" rel="noopener"><small>Åpne / test</small></a>
           <span class="ok" data-msg="${n}"></span>
         </div>`;
-      box.querySelector('textarea').value = messages[n] || '';
+      box.querySelector('textarea').value = plain[n] || '';
       list.appendChild(box);
     }
   }
 
   function flash(el, txt) { el.textContent = txt; setTimeout(() => el.textContent = '', 3000); }
-  const busy = on => document.querySelectorAll('button').forEach(b => b.disabled = on);
+  const busy = on => document.querySelectorAll('button').forEach(b => { if (on) { b.dataset.was = b.disabled ? '1' : ''; b.disabled = true; } else b.disabled = b.dataset.was === '1'; });
 
   async function save(nums, label) {
-    nums.forEach(n => messages[n] = document.querySelector(`textarea[data-n="${n}"]`).value);
+    nums = nums.filter(n => n in plain && dkeys[n]);
     busy(true);
     try {
+      for (const n of nums) {
+        const t = document.querySelector(`textarea[data-n="${n}"]`).value;
+        plain[n] = t;
+        messages[n] = t ? await Lock.encrypt(t, dkeys[n]) : '';
+      }
       await writeJson('messages.json', messages, `Oppdater luke ${label}`);
       nums.forEach(n => flash(document.querySelector(`[data-msg="${n}"]`), '✓ Lagret (synlig om ca. 1 min)'));
     } finally { busy(false); }
@@ -181,8 +208,8 @@
     try {
       if (s) await save([s], s);
       if (c) {
-        await navigator.clipboard.writeText(location.href.replace(/admin\.html.*$/, '') + '?luke=' + c);
-        e.target.textContent = 'Kopiert!'; setTimeout(() => e.target.textContent = 'Kopier lenke', 1500);
+        await navigator.clipboard.writeText(doorLink(c));
+        e.target.textContent = 'Kopiert!'; setTimeout(() => e.target.textContent = 'Kopier lenke (med nøkkel)', 1500);
       }
     } catch (err) { alert(err.message); }
   });
@@ -193,11 +220,33 @@
     busy(true);
     try {
       config.year = Number($('year').value) || config.year;
-      const code = $('bypass').value;
-      if (code) config.bypassHash = await sha256(code);
+      const code = $('bypass').value.trim();
+      if (code) { config.bypassCode = code; config.bypassHash = await sha256(code); }
+      else if (config.bypassCode !== undefined) { config.bypassCode = ''; config.bypassHash = ''; }
       await writeJson('config.json', config, 'Oppdater innstillinger');
-      $('bypass').value = ''; flash($('cfgMsg'), '✓ Lagret'); render();
+      flash($('cfgMsg'), '✓ Lagret'); render();
     } catch (err) { alert(err.message); } finally { busy(false); }
+  });
+  $('saveMaster').addEventListener('click', async () => {
+    const m = $('master').value.trim();
+    if (m.length < 16) { alert('Hovedhemmeligheten må være minst 16 tegn.'); return; }
+    master = m; ls.set('adm-master', master);
+    await prepare(); render();
+  });
+  $('printQr').addEventListener('click', () => {
+    if (!master) { alert('Sett en hovedhemmelighet først.'); return; }
+    const figs = [];
+    for (let n = 1; n <= 24; n++) {
+      const qr = qrcode(0, 'M'); qr.addData(doorLink(n)); qr.make();
+      figs.push(`<figure>${qr.createSvgTag(6, 12)}<figcaption>Luke ${n}</figcaption></figure>`);
+    }
+    const w = window.open('', '_blank');
+    if (!w) { alert('Nettleseren blokkerte vinduet – tillat popup.'); return; }
+    w.document.write(`<!doctype html><html lang="nb"><meta charset="utf-8"><title>QR-koder luker</title>
+<style>body{font-family:system-ui;margin:10mm}.g{display:grid;grid-template-columns:repeat(4,1fr);gap:8mm}figure{margin:0;text-align:center;break-inside:avoid}svg{width:100%;height:auto}figcaption{font-weight:700;font-size:14pt}.w{background:#fff3cd;padding:8px;margin-bottom:8mm}@page{size:A4;margin:10mm}@media print{.w{display:none}}</style>
+<div class="w"><b>Hemmelig:</b> QR-kodene inneholder nøklene til lukene. Skriv ut / lagre som PDF, men ikke legg denne siden i repoet eller del den offentlig.</div>
+<div class="g">${figs.join('')}</div>`);
+    w.document.close();
   });
   $('logout').addEventListener('click', () => { ss.del('adm-tok'); location.reload(); });
 
@@ -209,6 +258,12 @@
     try {
       messages = await readJson('messages.json');
       try { config = await readJson('config.json'); } catch { config = { year: new Date().getFullYear(), bypassHash: '' }; }
+      master = ls.get('adm-master') || '';
+      if (!master && !Object.values(messages).some(Lock.isEncrypted)) {
+        master = Lock.newSecret(); ls.set('adm-master', master);
+        alert('Ny hovedhemmelighet er opprettet. Åpne Innstillinger og lagre den i en passordbehandler – uten den kan ikke lukene leses igjen.');
+      }
+      await prepare();
       ss.set('adm-tok', token); ls.set('adm-repo', repo); ls.set('adm-branch', branch);
       $('login').hidden = true; $('editor').hidden = false; render();
     } catch (e) { $('loginErr').textContent = e.message; } finally { busy(false); }

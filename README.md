@@ -1,10 +1,11 @@
-﻿# Jorunns adventskalender (statisk, GitHub Pages)
+# Jorunns adventskalender (statisk, GitHub Pages)
 
 Ren statisk side – ingen server. Filer:
 
 - `index.html` – kalenderen. `/?luke=7` zoomer inn til luke 7 og åpner den.
 - `admin.html` – redigering av tekstene. Lagrer ved å committe `messages.json` via GitHub API.
-- `messages.json` – tekstene (luke 1–24). Lenker: `[KLIKK HER](https://...)`.
+- `lock.js` – AES-GCM-kryptering av lukene (delt av index og admin).
+- `messages.json` – lukene, **krypterte**. Lenker i teksten: `[KLIKK HER](https://...)`.
 - `config.json` – `year` (kalenderår) og `bypassHash` (SHA-256 av hemmelig kode).
 
 ## Publisere
@@ -24,5 +25,10 @@ Sett en bypass-kode lokalt ved å lime sha256-hash inn i `config.json`:
 
     node -e "console.log(require('crypto').createHash('sha256').update('minkode').digest('hex'))"
 
-## Begrensning
-All data er offentlig lesbar i nettleseren (`messages.json`). Datosperren er derfor kun i grensesnittet.
+## Beskyttelse av innholdet
+- Hver luke krypteres med en egen nøkkel utledet fra en *hovedhemmelighet* (lagres kun i admin-nettleserens localStorage – lagre den også i en passordbehandler).
+- Nøkkelen ligger i QR-koden som URL-fragment: `…/?luke=5#k=NØKKEL`. Fragmentet sendes aldri til serveren. Uten QR-koden er innholdet uleselig, selv for den som leser repoet.
+- Admin → *QR-koder (utskrift)* lager utskriftsark. Ikke legg disse i repoet (`qr-koder/` er git-ignorert).
+- Første gang: åpne admin og trykk *Lagre alle* for å kryptere eksisterende tekster.
+- Datosperren er fortsatt kun i grensesnittet; den som har papiret kan åpne luken tidlig.
+- Gamle klartekstversjoner finnes i git-historikken. Delingslenker til filmer bør i tillegg ha utløpsdato.

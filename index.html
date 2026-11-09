@@ -97,6 +97,7 @@
 <div class="toast" id="toast" role="status"></div>
 <footer class="foot"><a href="admin.html" aria-label="Admin" tabindex="-1">·</a></footer>
 
+<script src="lock.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -163,12 +164,21 @@
     return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
+  // Nøkler til luker (fra QR-koden: ...?luke=5#k=NØKKEL). Huskes i nettleseren slik at luken kan åpnes igjen.
+  const keysKey = 'jorunn-keys';
+  const keys = (() => { try { return JSON.parse(localStorage.getItem(keysKey) || '{}'); } catch { return {}; } })();
+  const saveKeys = () => { try { localStorage.setItem(keysKey, JSON.stringify(keys)); } catch {} };
+
   async function fetchDoor(n) {
     if (n > unlockedDays() && !bypass()) return { locked: true };
     const r = await fetch('messages.json?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('Feil ' + r.status);
     const msgs = await r.json();
-    return { day: n, text: msgs[String(n)] || '' };
+    const v = msgs[String(n)] || '';
+    if (!Lock.isEncrypted(v)) return { day: n, text: v };
+    if (!keys[n]) return { nokey: true };
+    try { return { day: n, text: await Lock.decrypt(v, keys[n]) }; }
+    catch { return { nokey: true }; }
   }
 
   function zoomTo(el) {
@@ -223,6 +233,13 @@
       if (data.locked) {
         el.classList.add('locked-hint'); setTimeout(() => el.classList.remove('locked-hint'), 700);
         toast('Luke ' + n + ' kan ikke åpnes før ' + dateText(n) + ' 🎄');
+        await sleep(1600);
+        await zoomOut();
+        return;
+      }
+      if (data.nokey) {
+        el.classList.add('locked-hint'); setTimeout(() => el.classList.remove('locked-hint'), 700);
+        toast('Skann QR-koden for luke ' + n + ' for å åpne den 🎄');
         await sleep(1600);
         await zoomOut();
         return;
@@ -283,6 +300,8 @@
     const q = new URLSearchParams(location.search);
     const n = parseInt(q.get('luke') || q.get('door') || q.get('day') || '', 10);
     if (n >= 1 && n <= 24) {
+      const k = new URLSearchParams(location.hash.slice(1)).get('k');
+      if (k && /^[\w-]{20,}$/.test(k)) { keys[n] = k; saveKeys(); }
       // Forrige luker står allerede åpne når man ankommer (uten animasjon)
       // Kun luker som faktisk er åpnet (dato nådd, eller testmodus) – ellers ser det ut som tidligere luker er åpnet.
       const maxOpen = bypass() ? 24 : unlockedDays();
